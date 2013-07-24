@@ -43,9 +43,6 @@
  * isFrozen
  * isSealed
  *
- * Note: this shim doesn't do anything special with IE8's minimally useful
- * Object.defineProperty(domNode).
- *
  * The poly/strict module will set failIfShimmed to fail for some shims.
  * See the documentation for more information.
  *
@@ -68,6 +65,8 @@ define(['./lib/_base'], function (base) {
 		secrets,
 		protoSecretProp,
 		hasOwnProp = 'hasOwnProperty',
+		objectDefineProperty,
+		objectGetOwnPropertyDescriptor,
 		undef;
 
 	refObj = Object;
@@ -114,10 +113,24 @@ define(['./lib/_base'], function (base) {
 		'object-keys': 'keys',
 		'object-getownpropertynames': 'getOwnPropertyNames',
 		'object-defineproperty': 'defineProperty',
+		'object-defineproperty-domexclusive': function hasDefinePropertyForDom (object) {
+			try {
+				return 'defineProperty' in object && "sentinel" in Object.defineProperty({}, "sentinel", {});
+			}
+			catch (e) {
+			}
+		},
 		'object-defineproperties': 'defineProperties',
 		'object-isextensible': 'isExtensible',
 		'object-preventextensions': 'preventExtensions',
-		'object-getownpropertydescriptor': 'getOwnPropertyDescriptor'
+		'object-getownpropertydescriptor': 'getOwnPropertyDescriptor',
+		'object-getownpropertydescriptor-domexclusive': function hasGetOwnPropertyDescriptorObject(object) {
+			try {
+				return 'getOwnPropertyDescriptor' in object && Object.getOwnPropertyDescriptor({"sentinel":0}, "sentinel").value === 0;
+			}
+			catch (e) {
+			}
+		}
 	};
 
 	shims = {};
@@ -135,8 +148,22 @@ define(['./lib/_base'], function (base) {
 	}
 
 	function has (feature) {
+		var ret;
 		var prop = featureMap[feature];
-		return prop in refObj;
+
+		if (base.isFunction(prop)) {
+			// cache return value
+			ret = featureMap[feature] = prop(refObj);
+		}
+		else if (base.isString(prop)) {
+			ret = featureMap[feature] = prop in refObj;
+		}
+		else {
+			// return cached evaluate result
+			ret = prop;
+		}
+			
+		return ret;
 	}
 
 	function PolyBase () {}
@@ -154,6 +181,22 @@ define(['./lib/_base'], function (base) {
 			}
 		}
 		return result;
+	}
+
+	function shimDefineProperty (object, name, descriptor) {
+		object[name] = descriptor && descriptor.value;
+		return object;
+	}
+
+	function shimGetOwnPropertyDescriptor (object, name) {
+		return hasProp(object, name)
+			? {
+				value: object[name],
+				enumerable: true,
+				configurable: true,
+				writable: true
+			}
+			: undef;
 	}
 
 	// we might create an owned property to hold the secrets, but make it look
@@ -232,10 +275,18 @@ define(['./lib/_base'], function (base) {
 		};
 	}
 
-	if (!has('object-defineproperty') || !has('object-defineproperties')) {
+	if (!has('object-defineproperty')) {
+		Object.defineProperty = shims.defineProperty = shimDefineProperty;
+	}
+	else if(!has('object-defineproperty-domexclusive')) {
+		objectDefineProperty = Object.defineProperty;
 		Object.defineProperty = shims.defineProperty = function defineProperty (object, name, descriptor) {
-			object[name] = descriptor && descriptor.value;
-			return object;
+			if (base.isElement(object)) {
+				return objectDefineProperty.apply(Object, arguments);
+			}
+			else {
+				return shimDefineProperty.apply(Object, arguments);
+			}
 		};
 	}
 
@@ -274,15 +325,17 @@ define(['./lib/_base'], function (base) {
 	}
 
 	if (!has('object-getownpropertydescriptor')) {
+		Object.getOwnPropertyDescriptor = shims.getOwnPropertyDescriptor = shimGetOwnPropertyDescriptor;
+	}
+	else if (!has('object-getownpropertydescriptor-domexclusive')) {
+		objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 		Object.getOwnPropertyDescriptor = shims.getOwnPropertyDescriptor = function getOwnPropertyDescriptor (object, name) {
-			return hasProp(object, name)
-				? {
-					value: object[name],
-					enumerable: true,
-					configurable: true,
-					writable: true
-				}
-				: undef;
+			if (base.isElement(object)) {
+				return objectGetOwnPropertyDescriptor.apply(Object, arguments);
+			}
+			else {
+				return shimGetOwnPropertyDescriptor.apply(Object, arguments)
+			}
 		};
 	}
 
